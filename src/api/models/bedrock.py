@@ -841,6 +841,33 @@ class BedrockModel(BaseChatModel):
 
         return args
 
+    def _extract_reasoning_text(self, block: dict) -> str:
+        """Return plaintext reasoning from a Converse content block.
+
+        ReasoningContentBlock is a union. Plaintext thinking is nested under
+        reasoningText. redactedContent is an opaque blob with no text to expose,
+        and indexing reasoningText on that shape raises KeyError.
+        """
+        reasoning = block.get("reasoningContent")
+        if not isinstance(reasoning, dict):
+            return ""
+
+        reasoning_text = reasoning.get("reasoningText")
+        if isinstance(reasoning_text, dict):
+            return reasoning_text.get("text") or ""
+
+        if "redactedContent" in reasoning:
+            logger.info(
+                "Bedrock returned redacted reasoning content; omitting it from the response"
+            )
+            return ""
+
+        logger.warning(
+            "Unrecognized reasoningContent keys: %s",
+            ",".join(reasoning.keys()),
+        )
+        return ""
+
     def _estimate_reasoning_tokens(self, content: list[dict]) -> int:
         """
         Estimate reasoning tokens from reasoningContent blocks.
@@ -851,7 +878,7 @@ class BedrockModel(BaseChatModel):
         reasoning_text = ""
         for block in content:
             if "reasoningContent" in block:
-                reasoning_text += block["reasoningContent"]["reasoningText"].get("text", "")
+                reasoning_text += self._extract_reasoning_text(block)
 
         if reasoning_text:
             # Use tiktoken to estimate token count
@@ -895,9 +922,11 @@ class BedrockModel(BaseChatModel):
             message.content = ""
             for c in content:
                 if "reasoningContent" in c:
-                    message.reasoning_content = c["reasoningContent"][
-                        "reasoningText"
-                    ].get("text", "")
+                    text = self._extract_reasoning_text(c)
+                    if text:
+                        message.reasoning_content = (
+                            message.reasoning_content or ""
+                        ) + text
                 elif "text" in c:
                     message.content = c["text"]
                 else:
